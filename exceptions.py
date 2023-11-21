@@ -17,3 +17,7 @@ class NoCredentialsError(Error):
 class InvalidCredentialsError(Error):
     pass
 
+
+class NoDataAvailable(Error):
+    pass
+

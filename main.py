@@ -50,7 +50,7 @@ def _handle_exceptions(
     return [None, exc_object]
 
 
-def _get_user_id(cursor, username):
+def _get_user_id(cursor: sqlite3.Cursor, username: str):
     cursor.execute("""
         SELECT user_id FROM users
         WHERE username=?
@@ -58,6 +58,33 @@ def _get_user_id(cursor, username):
     user_id = cursor.fetchone()[0]
 
     return user_id
+
+
+def _decrypt_user_token(
+        cursor: sqlite3.Cursor,
+        username: str,
+
+        token: str | bytes
+):
+    cursor.execute("""
+        SELECT encrypted_token FROM users
+        WHERE username=?
+    """, [username])
+
+    encrypted_token = cursor.fetchone()[0]
+    try:
+        CipherManager().fernet.decrypt_data(
+            encrypted_token, password=token
+        )
+    except cryptography.fernet.InvalidToken:
+        return [False, None]
+    except Exception as app_err:
+        return _handle_exceptions(
+            app_err, "app",
+            caller_name=_decrypt_user_token.__name__
+        )
+
+    return [True, None]
 
 
 class _DatabaseFunctions:
@@ -84,7 +111,7 @@ class _DatabaseFunctions:
                 user_id TEXT,
 
                 username TEXT,
-                password_title TEXT,
+                password_title TEXT UNIQUE,
 
                 password_data BLOB,
                 FOREIGN KEY (username) REFERENCES users(username)
@@ -117,6 +144,7 @@ class _DatabaseFunctions:
         return False
 
     def close(self):
+        self.db_conn.commit()
         self.db_conn.close()
 
     def __enter__(self):
@@ -177,6 +205,62 @@ class DatabaseManager(_DatabaseFunctions):
 
         logging.info(
             f"[{caller_name}]: Created new user '{username}'"
+        )
+        return [True, None]
+
+    def delete_user(
+            self, username: str,
+            token: str | bytes
+    ):
+        result = self._check_user_existence(username)
+        if not result:
+            return [None, exceptions.InvalidUser("A user with this name does not exist")]
+
+        if not isinstance(username, str):
+            raise TypeError("Username must be a string")
+
+        if not isinstance(token, str | bytes):
+            raise TypeError("Token must be a string")
+
+        caller_name = f"{type(self).__name__}.{self.delete_user.__name__}"
+        decrypt_return_list = _decrypt_user_token(
+            self.db_cursor, username,
+            token
+        )
+
+        if decrypt_return_list[1]:  # [None, error]
+            return decrypt_return_list
+
+        if not decrypt_return_list[0]:  # [False, None]
+            raise exceptions.InvalidCredentialsError()
+
+        try:
+            with self.db_conn:
+                self.db_cursor.execute("""
+                    DELETE FROM user_mapping
+                    WHERE username=?
+                """, [username])
+                self.db_cursor.execute("""
+                    DELETE FROM user_data
+                    WHERE username=?
+                """, [username])
+                self.db_cursor.execute("""
+                    DELETE FROM users
+                    WHERE username=?
+                """, [username])
+        except sqlite3.Error as db_err:
+            return _handle_exceptions(
+                db_err, "db",
+                caller_name=caller_name
+            )
+        except Exception as app_err:
+            return _handle_exceptions(
+                app_err, "db",
+                caller_name=caller_name
+            )
+
+        logging.info(
+            f"[{caller_name}]: Deleted user '{username}'"
         )
         return [True, None]
 
@@ -241,6 +325,19 @@ class UserManager(_DatabaseFunctions):
             return [None, ValueError("Password data is missing")]
 
         caller_name = f"{type(self).__name__}.{self.add_entry.__name__}"
+        decrypt_return_list = _decrypt_user_token(
+            self.db_cursor, self.username,
+            self._token
+        )
+
+        if decrypt_return_list[1]:  # [None, error]
+            return decrypt_return_list
+
+        if not decrypt_return_list[0]:  # [False, None]
+            raise exceptions.InvalidCredentialsError(
+                "Login and encryption credentials do not match"
+            )
+
         try:
             with self.db_conn:
                 self.db_cursor.execute("""
@@ -254,7 +351,8 @@ class UserManager(_DatabaseFunctions):
                 encrypted_data = self.cipher_mgr.fernet.encrypt_data(
                     password_data, password=self._token
                 )
-                if not result:
+
+                if result:
                     self.db_cursor.execute("""
                         UPDATE user_data 
                         SET password_data=? 
@@ -263,22 +361,24 @@ class UserManager(_DatabaseFunctions):
                     """, [encrypted_data, self.username, password_title])
 
                     logging.info(
-                        f"[{caller_name}]: Added new entry '{password_title}'"
-                    )
-                else:
-                    self.db_cursor.execute("""
-                        INSERT INTO user_data
-                        VALUES (?, ?, ?, ?, ?) 
-                    """, [
-                        str(uuid.uuid4()), user_id,
-                        self.username, password_title,
-
-                        encrypted_data
-                    ])
-
-                    logging.info(
                         f"[{caller_name}]: Modified entry '{password_title}'"
                     )
+                    return [True, None]
+
+                self.db_cursor.execute("""
+                    INSERT INTO user_data
+                    VALUES (?, ?, ?, ?, ?) 
+                """, [
+                    str(uuid.uuid4()), user_id,
+                    self.username, password_title,
+
+                    encrypted_data
+                ])
+
+                logging.info(
+                    f"[{caller_name}]: Added new entry '{password_title}'"
+                )
+                return [True, None]
         except sqlite3.Error as db_err:
             return _handle_exceptions(
                 db_err, "db",
@@ -289,20 +389,108 @@ class UserManager(_DatabaseFunctions):
                 app_err, "db",
                 caller_name=caller_name
             )
+
+    def get_entry(self, password_title: str):
+        if not password_title:
+            return [None, ValueError("Password title is missing")]
+
+        caller_name = f"{type(self).__name__}.{self.get_entry.__name__}"
+        decrypt_return_list = _decrypt_user_token(
+            self.db_cursor, self.username,
+            self._token
+        )
+
+        if decrypt_return_list[1]:  # [None, error]
+            return decrypt_return_list
+
+        if not decrypt_return_list[0]:  # [False, None]
+            raise exceptions.InvalidCredentialsError(
+                "Login and encryption credentials do not match"
+            )
+
+        try:
+            with self.db_conn:
+                self.db_cursor.execute("""
+                    SELECT password_data FROM user_data
+                    WHERE username=? AND password_title=? 
+                """, [self.username, password_title])
+
+                result = self.db_cursor.fetchone()
+            if not result:
+                return [None, exceptions.NoDataAvailable(
+                    f"No password with title '{password_title}' exists"
+                )]
+
+            decrypted_data = self.cipher_mgr.fernet.decrypt_data(
+                    result[0], password=self._token
+            )
+            password = decrypted_data.decode('utf-8')
+        except sqlite3.Error as db_err:
+            return _handle_exceptions(
+                db_err, "db",
+                caller_name=caller_name
+            )
+        except Exception as app_err:
+            return _handle_exceptions(
+                app_err, "db",
+                caller_name=caller_name
+            )
+
+        logging.info(
+            f"[{caller_name}]: Fetched entry {self.username}:'{password_title}'"
+        )
+        return [password, None]
+
+    def delete_entry(self, password_title: str):
+        if not password_title:
+            return [None, ValueError("Password title is missing")]
+
+        caller_name = f"{type(self).__name__}.{self.delete_entry.__name__}"
+        decrypt_return_list = _decrypt_user_token(
+            self.db_cursor, self.username,
+            self._token
+        )
+
+        if decrypt_return_list[1]:  # [None, error]
+            return decrypt_return_list
+
+        if not decrypt_return_list[0]:  # [False, None]
+            raise exceptions.InvalidCredentialsError(
+                "Login and encryption credentials do not match"
+            )
+
+        try:
+            with self.db_conn:
+                self.db_cursor.execute("""
+                    SELECT password_data FROM user_data
+                    WHERE username=? AND password_title=? 
+                """, [self.username, password_title])
+
+                result = self.db_cursor.fetchone()
+
+            if not result:
+                return [None, exceptions.NoDataAvailable(
+                    f"No password with title '{password_title}' exists"
+                )]
+
+            self.db_cursor.execute("""
+                DELETE FROM user_data
+                WHERE password_title=?
+            """, [password_title])
+        except sqlite3.Error as db_err:
+            return _handle_exceptions(
+                db_err, "db",
+                caller_name=caller_name
+            )
+        except Exception as app_err:
+            return _handle_exceptions(
+                app_err, "db",
+                caller_name=caller_name
+            )
+
         return [True, None]
 
 
+# import sqlite3; db=sqlite3.connect('PasswordManager.db'); cur=db.cursor()
 if __name__ == '__main__':
-    pw = "PassWord"
-    logging.basicConfig(
-        stream=sys.stdout,
-        level=logging.DEBUG
-    )
-    db_mgr = DatabaseManager()
-
-    success, error = db_mgr.create_user("PopeKent", pw)
-    user_mgr = UserManager('PopeKent', pw)
-
-    user_mgr.add_entry(
-        "Example.com", 'MyPassIsWord!'
-    )
+    ...
