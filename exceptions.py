@@ -2,11 +2,11 @@ class Error(Exception):
     pass
 
 
-class ExistingUser(Error):
+class ExistingUserError(Error):
     pass
 
 
-class InvalidUser(Error):
+class InvalidUserError(Error):
     pass
 
 
