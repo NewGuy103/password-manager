@@ -18,6 +18,10 @@ class InvalidCredentialsError(Error):
     pass
 
 
-class NoDataAvailable(Error):
+class NoDataError(Error):
+    pass
+
+
+class DataExistsError(Error):
     pass
 

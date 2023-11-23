@@ -23,6 +23,12 @@ __all__ = [
 ]
 
 
+def _decrypt(data, token):
+    return CipherManager().fernet.decrypt_data(
+        data, password=token
+    )
+
+
 def _handle_exceptions(
         exc_object: Exception,
         exc_type: str | Literal["app", "db"],
@@ -276,13 +282,18 @@ class DatabaseManager(_DatabaseFunctions):
             bool: True if the user is created successfully, False otherwise.
 
         Raises:
-            RuntimeError: If a user with the same name already exists.
+            exceptions.NoCredentialsError: If no credentials are provided.
+            exceptions.ExistingUserError: If a user with the same name already exists.
             TypeError: If the provided username is not a string or the token is not a string or bytes.
         """
+        if not username or not token:
+            raise exceptions.NoCredentialsError(
+                "No credentials were provided"
+            )
 
         result = self._check_user_existence(username)
         if result:
-            raise RuntimeError("A user with this name already exists")
+            raise exceptions.ExistingUserError("A user with this name already exists")
 
         if not isinstance(username, str):
             raise TypeError("Username must be a string")
@@ -310,13 +321,13 @@ class DatabaseManager(_DatabaseFunctions):
                 db_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
         except Exception as app_err:
             _handle_exceptions(
                 app_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
 
         logging.info(
             f"[{caller_name}]: Created new user '{username}'"
@@ -384,13 +395,13 @@ class DatabaseManager(_DatabaseFunctions):
                 db_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
         except Exception as app_err:
             _handle_exceptions(
                 app_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
 
         logging.info(
             f"[{caller_name}]: Deleted user '{username}'"
@@ -498,32 +509,30 @@ class UserManager(_DatabaseFunctions):
         elif token_valid == -1:
             return False
 
+        with self.db_conn:
+            self.db_cursor.execute("""
+                SELECT * FROM user_data
+                WHERE username=? AND password_title=? 
+            """, [self.username, password_title])
+            entry_exists = self.db_cursor.fetchone()
+
+        if entry_exists:
+            raise exceptions.DataExistsError(
+                "Entry already exists in database, "
+                "did you mean to use 'modify_entry'?"
+            )
+
         try:
             with self.db_conn:
                 self.db_cursor.execute("""
                     SELECT * FROM user_data
                     WHERE username=? AND password_title=? 
                 """, [self.username, password_title])
-
-                result = self.db_cursor.fetchone()
                 user_id = _get_user_id(self.db_cursor, self.username)
 
                 encrypted_data = self.cipher_mgr.fernet.encrypt_data(
                     password_data, password=self._token
                 )
-
-                if result:
-                    self.db_cursor.execute("""
-                        UPDATE user_data 
-                        SET password_data=? 
-
-                        WHERE username=? AND password_title=? 
-                    """, [encrypted_data, self.username, password_title])
-
-                    logging.info(
-                        f"[{caller_name}]: Modified entry '{password_title}'"
-                    )
-                    return True
 
                 self.db_cursor.execute("""
                     INSERT INTO user_data
@@ -544,13 +553,81 @@ class UserManager(_DatabaseFunctions):
                 db_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
         except Exception as app_err:
             _handle_exceptions(
                 app_err, "db",
                 caller_name=caller_name
             )
+            return -1
+
+    def modify_entry(
+            self, password_title: str,
+            password_data: str | bytes
+    ):
+        if not password_title or not password_data:
+            raise ValueError("Password data is missing")
+
+        caller_name = f"{type(self).__name__}.{self.modify_entry.__name__}"
+        token_valid = _verify_user_token(
+            self.db_cursor, self.username,
+            self._token
+        )
+
+        if not token_valid:
+            raise exceptions.InvalidCredentialsError(
+                "Login and encryption credentials do not match"
+            )
+        elif token_valid == -1:
             return False
+
+        with self.db_conn:
+            self.db_cursor.execute("""
+                SELECT * FROM user_data
+                WHERE username=? AND password_title=? 
+            """, [self.username, password_title])
+            entry_exists = self.db_cursor.fetchone()
+
+        if not entry_exists:
+            raise exceptions.NoDataError(
+                "Entry doesn't exist in database, "
+                "did you mean to use 'add_entry'?"
+            )
+
+        try:
+            with self.db_conn:
+                self.db_cursor.execute("""
+                    SELECT * FROM user_data
+                    WHERE username=? AND password_title=? 
+                """, [self.username, password_title])
+
+                encrypted_data = self.cipher_mgr.fernet.encrypt_data(
+                    password_data, password=self._token
+                )
+
+                self.db_cursor.execute("""
+                    UPDATE user_data 
+                    SET password_data=? 
+
+                    WHERE username=? AND password_title=? 
+                """, [encrypted_data, self.username, password_title])
+
+                logging.info(
+                    f"[{caller_name}]: Modified entry '{password_title}'"
+                )
+                return True
+        except sqlite3.Error as db_err:
+            _handle_exceptions(
+                db_err, "db",
+                caller_name=caller_name
+            )
+            return -1
+        except Exception as app_err:
+            _handle_exceptions(
+                app_err, "db",
+                caller_name=caller_name
+            )
+            return -1
 
     def get_entry(self, password_title: str):
         """
@@ -603,13 +680,13 @@ class UserManager(_DatabaseFunctions):
                 db_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
         except Exception as app_err:
             _handle_exceptions(
                 app_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
 
         logging.info(
             f"[{caller_name}]: Fetched entry {self.username}:'{password_title}'"
@@ -684,21 +761,74 @@ class UserManager(_DatabaseFunctions):
                 db_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
         except Exception as app_err:
             _handle_exceptions(
                 app_err, "db",
                 caller_name=caller_name
             )
-            return False
+            return -1
 
         logging.info(
             f"[{caller_name}]: Deleted entry {self.username}:'{password_title}'"
         )
         return True
 
+    def get_latest(self, num: int = 50):
+        caller_name = f"{type(self).__name__}.{self.get_entry.__name__}"
+        token_valid = _verify_user_token(
+            self.db_cursor, self.username,
+            self._token
+        )
+
+        if not token_valid:
+            raise exceptions.InvalidCredentialsError(
+                "Login and encryption credentials do not match"
+            )
+        elif token_valid == -1:
+            return False
+
+        try:
+            with self.db_conn, multiprocessing.Pool() as pool:
+                self.db_cursor.execute("""
+                    SELECT password_title, password_data 
+                    FROM user_data
+                    WHERE username=?
+                """, [self.username])
+
+                result = self.db_cursor.fetchmany(num)
+                if not result:
+                    return None
+
+                decrypted_passwords = []
+                password_data_list = [(row[0], row[1]) for row in result]
+
+                decrypted_data = pool.starmap(_decrypt, [(data, self._token) for _, data in password_data_list])
+
+                for index, (_, password_data) in enumerate(password_data_list):
+                    decrypted_password = decrypted_data[index].decode('utf-8')
+                    decrypted_passwords.append((password_data_list[index][0], decrypted_password))
+        except sqlite3.Error as db_err:
+            _handle_exceptions(
+                db_err, "db",
+                caller_name=caller_name
+            )
+            return -1
+        except Exception as app_err:
+            _handle_exceptions(
+                app_err, "db",
+                caller_name=caller_name
+            )
+            return -1
+
+        logging.info(
+            f"[{caller_name}]: Fetched {f'{num} entries' if num != 1 else f'{num} entry'} "
+            f"from {self.username}"
+        )
+        return decrypted_passwords
+
 
 # import sqlite3; db=sqlite3.connect('PasswordManager.db'); cur=db.cursor()
 if __name__ == '__main__':
-    raise NotImplementedError("Still working on the GUI!")
+    raise RuntimeError("This script must be imported as a module")
 
