@@ -2,11 +2,6 @@ import argparse
 import sys
 
 import _gui
-"""Production import
-from . import _gui
-from . import exceptions
-from . import db_utils
-"""
 
 __all__ = [
     'exceptions', 'db_utils'
