@@ -40,7 +40,9 @@ def _handle_exceptions(
 
     Parameters:
         exc_object (Exception): The exception object to handle.
-        exc_type (str | Literal["app", "db"]): The type of exception to handle, either "app" for application or "db" for database.
+        exc_type (str | Literal["app", "db"]): The type of exception to
+          handle, either "app" for application or "db" for database.
+
         caller_name (str): The name of the calling function where the exception occurred.
 
     Returns:
@@ -279,7 +281,7 @@ class DatabaseManager(_DatabaseFunctions):
             token (str): The token for the new user.
 
         Returns:
-            bool: True if the user is created successfully, False otherwise.
+            bool | int: True if the user is created successfully, -1 otherwise.
 
         Raises:
             exceptions.NoCredentialsError: If no credentials are provided.
@@ -346,7 +348,7 @@ class DatabaseManager(_DatabaseFunctions):
             token (str | bytes): The token associated with the user.
 
         Returns:
-            bool: True if the user is deleted successfully, False otherwise.
+            bool | int: True if the user is deleted successfully, -1 otherwise.
 
         Raises:
             exceptions.InvalidUserError: If the user with the provided username does not exist.
@@ -486,7 +488,7 @@ class UserManager(_DatabaseFunctions):
             password_data (str | bytes): The password or data to be stored, can be string or bytes.
 
         Returns:
-            bool: True if the entry is added successfully, False otherwise.
+            bool | int: True if the entry is added successfully, -1 otherwise.
 
         Raises:
             ValueError: If either password_title or password_data is missing.
@@ -507,7 +509,7 @@ class UserManager(_DatabaseFunctions):
                 "Login and encryption credentials do not match"
             )
         elif token_valid == -1:
-            return False
+            return -1
 
         with self.db_conn:
             self.db_cursor.execute("""
@@ -565,6 +567,21 @@ class UserManager(_DatabaseFunctions):
             self, password_title: str,
             password_data: str | bytes
     ):
+        """
+        Modifies a password entry associated with the given password title.
+
+        Parameters:
+            password_title (str): Title/identifier for the password entry.
+            password_data (str | bytes): The new password or data to replace the existing entry.
+
+        Returns:
+            bool | int: True if the entry is modified successfully, -1 otherwise.
+
+        Raises:
+            ValueError: If either password_title or password_data is missing.
+            exceptions.InvalidCredentialsError: If login and encryption credentials do not match.
+        """
+
         if not password_title or not password_data:
             raise ValueError("Password data is missing")
 
@@ -579,7 +596,7 @@ class UserManager(_DatabaseFunctions):
                 "Login and encryption credentials do not match"
             )
         elif token_valid == -1:
-            return False
+            return -1
 
         with self.db_conn:
             self.db_cursor.execute("""
@@ -637,7 +654,8 @@ class UserManager(_DatabaseFunctions):
             password_title (str): Title/identifier for the password entry to retrieve.
 
         Returns:
-            str | None: The retrieved password as a string, or None if the entry doesn't exist.
+            str | int | None: The retrieved password as a string, None if the entry doesn't exist
+              or -1 if an exceptions occurs while retrieving the password.
 
         Raises:
             ValueError: If password_title is missing.
@@ -658,7 +676,7 @@ class UserManager(_DatabaseFunctions):
                 "Login and encryption credentials do not match"
             )
         elif token_valid == -1:
-            return False
+            return -1
 
         try:
             with self.db_conn:
@@ -701,26 +719,10 @@ class UserManager(_DatabaseFunctions):
             password_title (str): Title/identifier for the password entry to delete.
 
         Returns:
-            bool: True if the entry is deleted successfully, False otherwise.
+            bool | int: True if the entry is deleted successfully, -1 otherwise.
 
         Raises:
             ValueError: If password_title is missing.
-            exceptions.InvalidCredentialsError: If login and encryption credentials do not match.
-        """
-
-        # method doc
-        """
-        Adds a new password entry for the user.
-
-        Parameters:
-            password_title (str): Title/identifier for the password entry.
-            password_data (str | bytes): The password or data to be stored, can be string or bytes.
-
-        Returns:
-            bool: True if the entry is added successfully, False otherwise.
-
-        Raises:
-            ValueError: If either password_title or password_data is missing.
             exceptions.InvalidCredentialsError: If login and encryption credentials do not match.
         """
 
@@ -738,7 +740,7 @@ class UserManager(_DatabaseFunctions):
                 "Login and encryption credentials do not match"
             )
         elif token_valid == -1:
-            return False
+            return -1
 
         try:
             with self.db_conn:
@@ -775,6 +777,21 @@ class UserManager(_DatabaseFunctions):
         return True
 
     def get_latest(self, num: int = 50):
+        """
+        Retrieves the latest password entries associated with the user.
+
+        Parameters:
+            num (int, optional): The number of latest entries to retrieve. Defaults to 50.
+
+        Returns:
+            list | int | None: A list of tuples containing password titles and passwords as strings,
+             None if no entries are found or -1 if an exception occurs during
+             password retrieval.
+
+        Raises:
+            exceptions.InvalidCredentialsError: If login and encryption credentials do not match.
+        """
+
         caller_name = f"{type(self).__name__}.{self.get_entry.__name__}"
         token_valid = _verify_user_token(
             self.db_cursor, self.username,
@@ -786,7 +803,7 @@ class UserManager(_DatabaseFunctions):
                 "Login and encryption credentials do not match"
             )
         elif token_valid == -1:
-            return False
+            return -1
 
         try:
             with self.db_conn, multiprocessing.Pool() as pool:
@@ -831,4 +848,3 @@ class UserManager(_DatabaseFunctions):
 # import sqlite3; db=sqlite3.connect('PasswordManager.db'); cur=db.cursor()
 if __name__ == '__main__':
     raise RuntimeError("This script must be imported as a module")
-
