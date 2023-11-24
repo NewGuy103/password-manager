@@ -13,7 +13,7 @@ import getpass
 import argon2
 import secrets
 
-from pycrypter import CipherManager
+from .pycrypter import CipherManager
 from typing import Literal
 from . import exceptions  # exceptions.py
 
