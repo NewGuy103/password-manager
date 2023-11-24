@@ -1,6 +1,6 @@
-# password-mgr
+# password_mgrmgr
 
-The `password-mgr` module provides functionalities for managing passwords, user authentication, and encryption within an SQLite database.
+The `password_mgr` module provides functionalities for managing passwords, user authentication, and encryption within an SQLite database.
 
 **Note**: This module assumes the presence of an SQLite database file named `PasswordManager.db` in the same working directory. The functionalities provided by this module will reference and interact with this database for managing passwords, user authentication, and encryption.
 
