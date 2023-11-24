@@ -15,7 +15,7 @@ import secrets
 
 from pycrypter import CipherManager
 from typing import Literal
-import exceptions  # exceptions.py
+from . import exceptions  # exceptions.py
 
 _version = "1.0"
 __all__ = [

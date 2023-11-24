@@ -1,5 +1,5 @@
 import tkinter as tk
-import db_utils  # ./db_utils.py
+from . import db_utils  # ./db_utils.py
 from tkinter import messagebox
 
 __version__ = "1.0"
